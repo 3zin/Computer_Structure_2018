@@ -1,0 +1,437 @@
+#----------------------------------------------------------------------
+# 
+#  4190.308 Computer Architecture (Fall 2018)
+#
+#  Project #5: Optimizing Performance on a Pipelined Y86-64 Processor
+#
+#  December 4, 2018
+#
+#  Jin-Soo Kim (jinsoo.kim@snu.ac.kr)
+#  Systems Software & Architecture Laboratory
+#  Dept. of Computer Science and Engineering
+#  Seoul National University
+#  http://csl.snu.ac.kr
+#
+#----------------------------------------------------------------------
+
+bmp_mosaic:
+
+#rax, rbx, rcx, rdx, rsi, rdi, rbp, rsp, r8 ~ r14
+	# imgptr is in %rdi
+	# width  is in %rsi
+	# height is in %rdx
+	# size 	 is in %rcx
+
+#--------------------initialize---------------------
+
+# use %rbp as a stack pointer
+	irmovq	$3, %r8
+	rrmovq	%rsp, %rbp
+	iaddq	$-176, %rsp
+	rmmovq	%rsi, -16(%rbp) # width
+
+	mulq	%r8, %rsi #	width*3
+
+# 상수 정보를 저장해놓는 레지스터
+
+	rmmovq	%rdx, -24(%rbp) # height
+	rmmovq	%rcx, -32(%rbp) # size
+	rmmovq	%rdi, -8(%rbp)  # imgptr
+
+	iaddq	$3, %rsi # (width*3)+3
+
+# width_byte : -40(%rcx)
+
+	irmovq	$4, %r9
+	irmovq	$0, %r10
+	rrmovq	%rdx, %rax # copy height
+
+	divq	%rcx, %rdx # quo
+
+	mrmovq	-16(%rbp), %rbx
+	rrmovq	%rbx, %rdi # copy
+	divq	%rcx, %rbx
+
+	divq	%r9, %rsi # (width*3+3)/4
+	rmmovq	%rdx, -56(%rbp) # num_height
+	mulq	%rcx, %rdx # quo * n2
+
+	rmmovq	%rbx, -72(%rbp) # num_width
+	mulq	%rcx, %rbx 
+
+	mulq	%r9, %rsi # (Width*3+3)/4*4
+	irmovq	$0, %r12 #G
+
+	subq	%rdx, %rax # original - modified
+	subq	%rbx, %rdi # original - modified
+	irmovq	$0, %r11 #R
+
+	rmmovq	%rsi, -40(%rbp)
+	rmmovq	%rax, -48(%rbp) # leftover_height
+	rmmovq	%rdi, -64(%rbp) # leftover_width
+
+
+# 특수한 레지스터는 미리 지정해놓도록 한다
+# R = %r11, G = %r12, B = %r13, num = %r14
+# Constant 3 = %r8, Constant 4 = %r9, Constant 0 = %r10
+
+
+# R, G, B, num
+# p
+	rrmovq	%r10, %rax
+	mrmovq	-56(%rbp) , %rdx
+	rmmovq	%r10, -112(%rbp) # p = 0 
+
+	irmovq	$0, %r13 #B
+
+	subq	%rdx, %rax # p - num_height
+	jle Loop_1
+	jmp Done_1
+
+Loop_1:
+
+	#width_byte*leftover_height + width_byte*size*(p-1) or 0
+	#-176(%rbp)
+	mrmovq	-40(%rbp), %rsi # width_byte
+	mrmovq	-48(%rbp), %rdi # leftover_height
+	mulq	%rsi, %rdi # rdi : width_byte * leftover_height
+
+	mrmovq	-32(%rbp), %rax # size
+	mulq	%rax, %rsi # rsi : size * width_byte
+
+	mrmovq	-112(%rbp), %rbx # p
+	iaddq	$-1, %rbx # p-1
+	mulq	%rbx, %rsi # size*width_byte*(p-1)
+	addq	%rdi, %rsi
+
+	mrmovq	-112(%rbp), %rbx # p
+	subq	%r10, %rbx
+	cmove	%rbx, %rsi # if p == 0... 0을 저장
+	rmmovq	%rsi, -176(%rbp)
+	
+
+	mrmovq	-48(%rbp), %rdi
+	mrmovq	-32(%rbp), %rax
+
+	mrmovq	-112(%rbp), %rbx
+
+	subq	%r10, %rbx 
+	cmove	%rdi, %rax
+	rmmovq	%rax, -120(%rbp) # block_height_size
+
+	rmmovq	%r10, -128(%rbp) # i = 0
+	mrmovq	-128(%rbp), %rax
+	mrmovq	-72(%rbp), %rsi
+
+	subq	%rsi, %rax # i - num_width
+	jle Loop_2
+	jmp Done_2
+
+Loop_2:
+
+	#i*size*3 + offset = -160(%rbp)
+	mrmovq  -128(%rbp), %rsi # i
+	mrmovq	-32(%rbp), %rdi # size
+	mulq	%rdi, %rsi
+
+	irmovq	$3, %r8
+	mulq	%r8, %rsi
+
+	mrmovq	-176(%rbp), %rax
+	addq	%rax, %rsi 
+
+	mrmovq	-8(%rbp), %rax
+	addq	%rax, %rsi
+	rmmovq	%rsi, -160(%rbp) # imgptr added
+
+	mrmovq	-72(%rbp), %rdi
+	mrmovq	-128(%rbp), %rsi
+	subq	%rdi, %rsi # i - num_width
+
+	mrmovq	-32(%rbp), %rax
+	mrmovq	-64(%rbp), %rsi
+	cmove	%rsi, %rax
+	mulq	%r8, %rax # multiply by 3
+	rmmovq	%rax, -136(%rbp) # block_width_size
+
+	mrmovq	-120(%rbp), %rsi
+	irmovq	$0, %r14 # j = 0
+	subq	%r10, %rsi # block_height_size - j
+	jg Loop_3
+	jmp Done_3
+
+Loop_3:
+	#j*width_byte + offset + imgptr = 168(%rbp)
+	rrmovq	%r14, %r8 # copy j
+	mrmovq	-40(%rbp), %rdi # width_byte
+
+	mrmovq	-160(%rbp), %rax # offset
+	irmovq	$0, %rdx # k = 0
+	mrmovq	-136(%rbp), %rbx # block_width_size
+
+	mulq	%rdi, %r8 # j*width_byte
+	mrmovq	-136(%rbp), %r9 # block_width_size
+
+	addq	%rax, %r8 # stall 2
+	#subq	%rdx, %rbx # block_width_size - k
+	#jg Loop_4
+	#jmp	Done_4
+
+Loop_4:
+
+	iaddq	$3, %rdx # k+=3 
+	mrmovb	(%r8), %rax # R
+	mrmovb	1(%r8), %rsi # G
+	mrmovb	2(%r8), %rbx # B
+	rrmovq	%r9, %rdi
+	addq	%rax, %r11 
+	addq	%rsi, %r12
+	addq	%rbx, %r13 
+	subq	%rdx, %rdi # block_width_size - k
+	jg Loop_tmp1
+	jmp Done_4
+	
+
+Loop_tmp1:
+	iaddq	$3, %rdx # k+=3 
+	mrmovb	3(%r8), %rax # R
+	mrmovb	4(%r8), %rsi # G
+	mrmovb	5(%r8), %rbx # B
+	rrmovq	%r9, %rdi
+	addq	%rax, %r11 
+	addq	%rsi, %r12
+	addq	%rbx, %r13 
+	subq	%rdx, %rdi # block_width_size - k
+	jg Loop_tmp2
+	jmp Done_4
+
+Loop_tmp2:
+	iaddq	$3, %rdx # k+=3 
+	mrmovb	6(%r8), %rax # R
+	mrmovb	7(%r8), %rsi # G
+	mrmovb  8(%r8), %rbx # B
+	rrmovq	%r9, %rdi
+	addq	%rax, %r11 
+	addq	%rsi, %r12
+	addq	%rbx, %r13 
+	subq	%rdx, %rdi # block_width_size - k
+	jg Loop_tmp3
+	jmp Done_4
+
+Loop_tmp3:
+	iaddq	$3, %rdx # k+=3 
+	mrmovb	9(%r8), %rax # R
+	mrmovb	10(%r8), %rsi # G
+	mrmovb  11(%r8), %rbx # B
+	rrmovq	%r9, %rdi
+	addq	%rax, %r11 
+	addq	%rsi, %r12
+	addq	%rbx, %r13 
+	subq	%rdx, %rdi # block_width_size - k
+	jg Loop_tmp4
+	jmp Done_4
+
+Loop_tmp4:
+	iaddq	$3, %rdx # k+=3 
+	mrmovb	12(%r8), %rax # R
+	mrmovb	13(%r8), %rsi # G
+	mrmovb  14(%r8), %rbx # B
+	rrmovq	%r9, %rdi
+	addq	%rax, %r11 
+	addq	%rsi, %r12
+	addq	%rbx, %r13 
+	subq	%rdx, %rdi # block_width_size - k
+	jg Loop_tmp5
+	jmp Done_4
+
+
+
+Loop_tmp5:
+	iaddq	$3, %rdx # k+=3 
+	mrmovb	15(%r8), %rax # R
+	mrmovb	16(%r8), %rsi # G
+	mrmovb  17(%r8), %rbx # B
+	rrmovq	%r9, %rdi
+	addq	%rax, %r11 
+	addq	%rsi, %r12
+	addq	%rbx, %r13 
+	subq	%rdx, %rdi # block_width_size - k
+	jg Loop_tmp6
+	jmp Done_4
+
+
+
+Loop_tmp6:
+	iaddq	$3, %rdx # k+=3 
+	mrmovb	18(%r8), %rax # R
+	mrmovb	19(%r8), %rsi # G
+	mrmovb  20(%r8), %rbx # B
+	rrmovq	%r9, %rdi
+	iaddq	$21, %r8 # offset+=3
+	addq	%rax, %r11 
+	addq	%rsi, %r12
+	addq	%rbx, %r13 
+	subq	%rdx, %rdi # block_width_size - k
+	jg Loop_4
+
+Done_4:
+	mrmovq	-120(%rbp), %rsi # block_height_size
+	iaddq	$1, %r14
+	subq	%r14, %rsi # block_height_size - j
+	jg Loop_3
+
+Done_3:
+	irmovq	$3, %rax
+
+	mrmovq	-120(%rbp), %rsi
+	mulq	%r14, %rdx # k*j = num
+	irmovq	$0, %r14 # j = 0
+
+	divq	%rax, %rdx # k/3
+
+	subq	%r10, %rdx # num - 0
+	jne Temp # divided by zero
+	jmp Temp2
+Temp:
+	divq	%rdx, %r11 # R/num
+	divq	%rdx, %r12 # G/num
+	divq	%rdx, %r13 # B/num
+
+Temp2:
+	subq	%r10, %rsi # block_height_size - j
+	jg Loop_5
+	jmp Done_5
+
+Loop_5:
+	#j*width_byte + offset + imgptr = 168(%rbp)
+	rrmovq	%r14, %r8 # j
+	mrmovq	-40(%rbp), %rdi # width_byte
+
+	mrmovq	-160(%rbp), %rax # offset
+	mrmovq	-136(%rbp), %rbx # block_width_size
+	irmovq	$0, %rdx # k = 0
+
+	mulq	%rdi, %r8 # j*width_byte
+	mrmovq	-136(%rbp), %r9 # block_width_size
+
+	iaddq	$0, %rbx # block_width_size - k
+	jne Tmp_tmp
+	jmp Done_6
+	
+Tmp_tmp:
+	addq	%rax, %r8
+
+Loop_6:
+
+	iaddq	$3, %rdx # k+=3
+	rrmovq	%r9, %rcx
+	rmmovb %r11, (%r8) # imgptr[offset] = R 
+	rmmovb %r12, 1(%r8) # imgptr[offset+1] = G
+	rmmovb %r13, 2(%r8) # imgptr[offset+2] = B
+	subq	%rdx, %rcx # block_width_size - k 
+	jg Loop_6_tmp1
+	jmp Done_6
+
+Loop_6_tmp1:
+	iaddq	$3, %rdx # k+=3
+	rrmovq	%r9, %rcx
+	rmmovb %r11, 3(%r8) # imgptr[offset] = R 
+	rmmovb %r12, 4(%r8) # imgptr[offset+1] = G
+	rmmovb %r13, 5(%r8) # imgptr[offset+2] = B
+	subq	%rdx, %rcx # block_width_size - k 
+	jg Loop_6_tmp2
+	jmp Done_6
+
+Loop_6_tmp2:
+	iaddq	$3, %rdx # k+=3
+	rrmovq	%r9, %rcx
+	rmmovb %r11, 6(%r8) # imgptr[offset] = R 
+	rmmovb %r12, 7(%r8) # imgptr[offset+1] = G
+	rmmovb %r13, 8(%r8) # imgptr[offset+2] = B
+	subq	%rdx, %rcx # block_width_size - k 
+	jg Loop_6_tmp3
+	jmp Done_6
+
+Loop_6_tmp3:
+	iaddq	$3, %rdx # k+=3
+	rrmovq	%r9, %rcx
+	rmmovb %r11, 9(%r8) # imgptr[offset] = R 
+	rmmovb %r12, 10(%r8) # imgptr[offset+1] = G
+	rmmovb %r13, 11(%r8) # imgptr[offset+2] = B
+	subq	%rdx, %rcx # block_width_size - k 
+	jg Loop_6_tmp4
+	jmp Done_6
+
+Loop_6_tmp4:
+	iaddq	$3, %rdx # k+=3
+	rrmovq	%r9, %rcx
+	rmmovb %r11, 12(%r8) # imgptr[offset] = R 
+	rmmovb %r12, 13(%r8) # imgptr[offset+1] = G
+	rmmovb %r13, 14(%r8) # imgptr[offset+2] = B
+	subq	%rdx, %rcx # block_width_size - k 
+	jg Loop_6_tmp5
+	jmp Done_6
+
+Loop_6_tmp5:
+	iaddq	$3, %rdx # k+=3
+	rrmovq	%r9, %rcx
+	rmmovb %r11, 15(%r8) # imgptr[offset] = R 
+	rmmovb %r12, 16(%r8) # imgptr[offset+1] = G
+	rmmovb %r13, 17(%r8) # imgptr[offset+2] = B
+	subq	%rdx, %rcx # block_width_size - k 
+	jg Loop_6_tmp6
+	jmp Done_6
+
+Loop_6_tmp6:
+	iaddq	$3, %rdx # k+=3
+	rrmovq	%r9, %rcx
+	rmmovb %r11, 18(%r8) # imgptr[offset] = R 
+	rmmovb %r12, 19(%r8) # imgptr[offset+1] = G
+	rmmovb %r13, 20(%r8) # imgptr[offset+2] = B
+	subq	%rdx, %rcx # block_width_size - k 
+	jg Loop_6_tmp7
+	jmp Done_6
+
+
+Loop_6_tmp7:
+
+	iaddq	$3, %rdx # k+=3
+	rrmovq	%r9, %rcx
+	rmmovb %r11, 21(%r8) # imgptr[offset] = R 
+	rmmovb %r12, 22(%r8) # imgptr[offset+1] = G
+	rmmovb %r13, 23(%r8) # imgptr[offset+2] = B
+	iaddq	$24, %r8 # offset += 3
+	subq	%rdx, %rcx # block_width_size - k 
+	jg Loop_6
+
+Done_6:
+	mrmovq	-120(%rbp), %rsi # block_height_size
+	iaddq	$1, %r14
+	subq	%r14, %rsi # block_height_size - j
+	jg Loop_5
+
+Done_5:
+	mrmovq	-128(%rbp), %rax # i
+	mrmovq	-72(%rbp), %rsi # num_width
+	iaddq	$1, %rax
+
+	irmovq	$0, %r11 # R = 0 , G = 0, B = 0, num = 0 
+	irmovq	$0, %r12
+	irmovq	$0, %r13 
+
+	rmmovq	%rax, -128(%rbp)
+	subq	%rsi, %rax # i - num_width
+	jle Loop_2
+
+Done_2:
+	mrmovq	-112(%rbp), %rax # p
+	mrmovq	-56(%rbp), %rsi # num_height
+	iaddq	$1, %rax
+	rmmovq	%rax, -112(%rbp)
+	subq	%rsi, %rax # p - num_height
+	jle Loop_1
+
+Done_1:
+	iaddq	$176, %rsp
+	ret
+
